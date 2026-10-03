@@ -10,14 +10,15 @@
     "bundle": "paperback bundle --folder=0.8 --use-node-fs",
     "serve": "paperback serve",
     "test": "paperback test",
-    "test:mangahub": "node --test tests/mangahub-pages.test.cjs",
+    "test:mangahub": "node tests/mangahub-crypto.test.cjs",
+    "test:bundle": "node tests/mangahub-bundle.test.cjs",
     "typecheck": "tsc --noEmit --noUnusedLocals false"
   },
   "author": "timkuel (based on Netsky's extensions)",
   "license": "GPL-3.0-or-later",
   "devDependencies": {
-    "@types/node": "18.16.20",
     "@tsconfig/recommended": "^1.0.7",
+    "@types/node": "18.16.20",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",
     "eslint": "^7.32.0",
@@ -25,6 +26,7 @@
     "typescript": "^4.9.5"
   },
   "dependencies": {
+    "@noble/ciphers": "1.3.0",
     "@paperback/toolchain": "^0.8.7",
     "@paperback/types": "^0.8.7",
     "cheerio": "^1.0.0",

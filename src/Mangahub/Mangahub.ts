@@ -22,18 +22,25 @@ import {
 
 import {
     parseChapters,
-    parseChapterImageUrls,
     parseMangaDetails,
     parseViewMore,
     parseHomeSections,
     parseSearch
 } from './MangahubParser'
+import {
+    base64UrlToBytes,
+    ChapterCryptoKey,
+    decryptChapterPages,
+    parseChapterPages,
+    parseEncryptedPagesEnvelope
+} from './MangahubCrypto'
 
 const MH_DOMAIN = 'https://mangahub.io'
 const MH_API_DOMAIN = 'https://api.mghcdn.com/graphql'
+const CHAPTER_CRYPTO_URL = `${MH_DOMAIN}/api/chapter-crypto`
 
 export const MangahubInfo: SourceInfo = {
-    version: '3.2.0',
+    version: '3.2.1',
     name: 'Mangahub',
     icon: 'icon.png',
     author: 'Netsky',
@@ -57,6 +64,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
                     ...(request.headers ?? {}),
                     'Referer': `${MH_DOMAIN}/`,
                     'User-Agent': await this.requestManager.getDefaultUserAgent(),
+                    ...(request.url.startsWith(CHAPTER_CRYPTO_URL) ? { 'Accept': 'application/json' } : {}),
                     ...(apiRequest ? {
                         'Origin': MH_DOMAIN,
                         'x-mhub-access': await this.getMhubAccess()
@@ -71,6 +79,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
     });
 
     stateManager = App.createSourceStateManager()
+    chapterCryptoKey: ChapterCryptoKey | null = null
 
     getMhubAccess = async (): Promise<string> => {
         const cookie = this.requestManager.cookieStore?.getAllCookies().find(cookie => cookie.name === 'mhub_access')
@@ -156,23 +165,81 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
         return parseChapters(data.data.manga.chapters, mangaId)
     }
 
-    async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-        const chapterUrl = `${MH_DOMAIN}/chapter/${encodeURIComponent(mangaId)}/chapter-${encodeURIComponent(chapterId)}`
+    async getChapterCryptoKey(forceRefresh = false): Promise<ChapterCryptoKey> {
+        if (!forceRefresh && this.chapterCryptoKey && this.chapterCryptoKey.expiresAt > Date.now() + 30000) {
+            return this.chapterCryptoKey
+        }
         const request = App.createRequest({
-            url: chapterUrl,
-            method: 'GET',
-            headers: { 'Accept': 'text/html' }
+            url: CHAPTER_CRYPTO_URL,
+            method: 'GET'
         })
         const response = await this.requestManager.schedule(request, 1)
-
         if (response.status >= 400) {
-            throw new Error(`MangaHub chapter page returned HTTP ${response.status}. Open the site in Paperback's Cloudflare bypass and try again.`)
+            throw new Error(`MangaHub chapter key request returned HTTP ${response.status}. Open MangaHub in Paperback's Cloudflare bypass and try again.`)
+        }
+        let data: { keyId?: string, key?: string, expiresAt?: number }
+        try {
+            data = JSON.parse(response.data as string)
+        } catch {
+            throw new Error('MangaHub returned an invalid chapter key response')
+        }
+        if (!data.keyId || !data.key) throw new Error('MangaHub chapter decryption key is unavailable')
+        const key: ChapterCryptoKey = {
+            keyId: data.keyId,
+            keyBytes: base64UrlToBytes(data.key),
+            expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : Date.now() + 300000
+        }
+        this.chapterCryptoKey = key
+        return key
+    }
+
+    async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
+        const request = App.createRequest({
+            url: MH_API_DOMAIN,
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            data: {
+                query: `query {
+                    chapter(x: m01, slug: "${mangaId}", number: ${Number(chapterId)}) {
+                      pages
+                      title
+                      slug
+                    }
+                  }`
+            }
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        if (response.status >= 400) throw new Error(`MangaHub chapter request returned HTTP ${response.status}`)
+
+        let data: { data?: { chapter?: { pages?: string } }, errors?: Array<{ message?: string }> }
+        try {
+            data = JSON.parse(response.data as string)
+        } catch {
+            throw new Error('MangaHub returned an invalid chapter response')
+        }
+        if (data.errors?.length) {
+            const errorText = data.errors.map(error => error.message ?? '').join(' ')
+            if (/rate\s*limit|api\s*key|encryption unavailable/i.test(errorText)) {
+                await this.refreshAPIKey(mangaId, chapterId)
+                throw new Error('MangaHub temporarily limited chapter access. Please try again after Cloudflare bypass.')
+            }
+            throw new Error(`MangaHub chapter request failed: ${errorText || 'unknown error'}`)
         }
 
-        const pages = parseChapterImageUrls(response.data ?? '')
-        if (!pages.length) {
-            throw new Error(`MangaHub did not include chapter images in its reader page (${mangaId}, chapter ${chapterId}). Open this chapter in Paperback's Cloudflare bypass and try again.`)
+        let pagesJson = data.data?.chapter?.pages
+        if (!pagesJson) throw new Error(`MangaHub returned no chapter pages (${mangaId}, chapter ${chapterId})`)
+        if (pagesJson.startsWith('enc:')) {
+            const envelope = parseEncryptedPagesEnvelope(pagesJson)
+            if (!envelope) throw new Error('MangaHub changed its chapter encryption format')
+            let key = await this.getChapterCryptoKey()
+            if (key.keyId !== envelope.keyId) key = await this.getChapterCryptoKey(true)
+            pagesJson = decryptChapterPages(pagesJson, key)
         }
+
+        const pages = parseChapterPages(pagesJson)
 
         return App.createChapterDetails({ id: chapterId, mangaId, pages })
     }
@@ -448,10 +515,10 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
         })
     }
 
-    async refreshAPIKey() {
+    async refreshAPIKey(mangaId: string, chapterId: string) {
         // Request new access token
         const request = App.createRequest({
-            url: `${MH_DOMAIN}/chapter/the-last-human/chapter-1?reloadKey=1`,
+            url: `${MH_DOMAIN}/chapter/${encodeURIComponent(mangaId)}/chapter-${encodeURIComponent(chapterId)}?reloadKey=1`,
             method: 'GET',
             headers: {
                 'Referer': `${MH_DOMAIN}/`,

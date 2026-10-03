@@ -13,32 +13,6 @@ import * as cheerio from 'cheerio'
 
 const MH_CDN_THUMBS_DOMAIN = 'https://thumb.mghcdn.com'
 
-// MangaHub's reader HTML contains the resolved image URLs even when its
-// GraphQL chapter.pages value is no longer readable by older clients.
-export const parseChapterImageUrls = (html: string): string[] => {
-    const $ = cheerio.load(html)
-    const reader = $('#mangareader')
-    const pages: string[] = []
-    const seen = new Set<string>()
-
-    reader.find('img').each((_index, image) => {
-        const source = $(image).attr('data-src') ?? $(image).attr('src')
-        if (!source) return
-        const url = source.startsWith('//') ? `https:${source}` : source
-        if (!/^https:\/\/imgx\.mghcdn\.com\/[^\s?#]+(?:\?[^\s#]*)?$/i.test(url)) return
-        if (seen.has(url)) return
-        seen.add(url)
-        pages.push(url)
-    })
-
-    const countLabel = reader.find('p').map((_index, element) => $(element).text().trim()).get()
-        .find(text => /^\d+\/\d+$/.test(text))
-    const expectedCount = countLabel ? Number(countLabel.split('/')[1]) : 0
-    if (expectedCount > 0 && pages.length !== expectedCount) return []
-
-    return pages
-}
-
 export const parseMangaDetails = (data: any, mangaId: string): SourceManga => {
     const titles: string[] = []
 

@@ -4,14 +4,14 @@
   "repositoryName": "Timkuel's Paperback Extensions (0.8)",
   "repository": "https://github.com/timkuel/PaperBackExtension",
   "baseURL": "https://timkuel.github.io/PaperBackExtension/0.8",
-  "description": "Independent Paperback 0.8 extensions, based on Netsky's sources and maintained for MangaHub",
+  "description": "Independent Paperback 0.8 MangaHub extension based on Netsky's source",
   "scripts": {
     "prebundle": "node scripts/prepare-bundles.cjs",
     "bundle": "paperback bundle --folder=0.8 --use-node-fs",
     "serve": "paperback serve",
     "test": "paperback test",
     "test:mangahub": "node tests/mangahub.test.cjs",
-    "test:bundle": "node tests/mangahub-bundle.test.cjs && node tests/mangahere-bundle.test.cjs",
+    "test:bundle": "node tests/mangahub-bundle.test.cjs",
     "typecheck": "tsc --noEmit --noUnusedLocals false"
   },
   "author": "timkuel (based on Netsky's extensions)",

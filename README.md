@@ -1,6 +1,6 @@
 # Paperback Extensions (0.8)
 
-An independent Paperback 0.8 extension project based on [Netsky's 0.8 sources](https://github.com/TheNetsky/netskys-extensions/tree/0.8). It includes the original source set, with current maintenance focused on MangaHub. This repository is separate from Netsky's repository.
+An independent Paperback 0.8 MangaHub extension based on [Netsky's 0.8 source](https://github.com/TheNetsky/netskys-extensions/tree/0.8). Use Netsky's repository for MangaHere and the other unchanged sources. This repository publishes only MangaHub to avoid duplicate source entries.
 
 ## MangaHub chapter loading
 
@@ -9,10 +9,6 @@ Chapter loading first checks MangaHub's CDN for numbered image URLs, following t
 When CDN discovery fails, the extension requests GraphQL `chapter.pages` and decrypts MangaHub's `enc:v1` AES-256-GCM envelope using the rotating key from `/api/chapter-crypto`. It refreshes the key when its ID changes. This path was adapted for Paperback 0.8 after comparing [Elrulia's working 0.9 change](https://github.com/Elrulia/paperback-extension/commit/2552fcfba1cb960147afd9a12bee0e17da9812f4). MangaHub metadata and chapter lists still use GraphQL. The extension continues to require Paperback's Cloudflare bypass when those requests are challenged.
 
 The site can change again, and this MangaHub version has not yet been tested inside the iOS app. CDN discovery assumes contiguous page numbers; an incorrectly missing tail page can still make a chapter appear shorter. The local tests cover CDN discovery, decryption, and both paths in the built 0.8 bundle.
-
-## MangaHere
-
-MangaHere 3.0.6 publishes a fresh install version of the existing 0.8 source. Its exported homepage method and current MangaHere metadata and chapter-list pages were checked against the live site. If Paperback reports that `getHomePageSections` is not implemented, refresh this repository and update MangaHere in the app so it loads version 3.0.6.
 
 ## Build
 
@@ -30,4 +26,4 @@ The installable repository output is generated under `bundles/0.8/`. A GitHub Ac
 
 ## Credits and license
 
-The original sources and their attribution are retained. See [LICENSE](LICENSE), [COPYING](COPYING), the original [Netsky project](https://github.com/TheNetsky/netskys-extensions/tree/0.8), and [HailXD's GPL-3.0 project](https://github.com/HailXD/pb-extensions). The upstream package metadata declares `GPL-3.0-or-later`, while the included upstream LICENSE file contains an MIT notice. This project preserves both notices; the discrepancy needs clarification from the upstream maintainers.
+The MangaHub source and its attribution are retained. See [LICENSE](LICENSE), [COPYING](COPYING), the original [Netsky project](https://github.com/TheNetsky/netskys-extensions/tree/0.8), and [HailXD's GPL-3.0 project](https://github.com/HailXD/pb-extensions). The upstream package metadata declares `GPL-3.0-or-later`, while the included upstream LICENSE file contains an MIT notice. This project preserves both notices; the discrepancy needs clarification from the upstream maintainers.

@@ -11,7 +11,7 @@
     "serve": "paperback serve",
     "test": "paperback test",
     "test:mangahub": "node tests/mangahub.test.cjs",
-    "test:bundle": "node tests/mangahub-bundle.test.cjs",
+    "test:bundle": "node tests/mangahub-bundle.test.cjs && node tests/mangahere-bundle.test.cjs",
     "typecheck": "tsc --noEmit --noUnusedLocals false"
   },
   "author": "timkuel (based on Netsky's extensions)",

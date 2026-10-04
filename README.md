@@ -10,6 +10,10 @@ When CDN discovery fails, the extension requests GraphQL `chapter.pages` and dec
 
 The site can change again, and this MangaHub version has not yet been tested inside the iOS app. CDN discovery assumes contiguous page numbers; an incorrectly missing tail page can still make a chapter appear shorter. The local tests cover CDN discovery, decryption, and both paths in the built 0.8 bundle.
 
+## MangaHere
+
+MangaHere 3.0.6 publishes a fresh install version of the existing 0.8 source. Its exported homepage method and current MangaHere metadata and chapter-list pages were checked against the live site. If Paperback reports that `getHomePageSections` is not implemented, refresh this repository and update MangaHere in the app so it loads version 3.0.6.
+
 ## Build
 
 Install Node.js 20 or newer, then run:

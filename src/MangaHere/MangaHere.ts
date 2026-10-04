@@ -36,7 +36,7 @@ import { URLBuilder } from './MangaHereHelper'
 const MH_DOMAIN = 'https://www.mangahere.cc'
 
 export const MangaHereInfo: SourceInfo = {
-    version: '3.0.5',
+    version: '3.0.6',
     name: 'MangaHere',
     icon: 'icon.png',
     author: 'Netsky',

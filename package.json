@@ -10,7 +10,7 @@
     "bundle": "paperback bundle --folder=0.8 --use-node-fs",
     "serve": "paperback serve",
     "test": "paperback test",
-    "test:mangahub": "node tests/mangahub-crypto.test.cjs",
+    "test:mangahub": "node tests/mangahub.test.cjs",
     "test:bundle": "node tests/mangahub-bundle.test.cjs",
     "typecheck": "tsc --noEmit --noUnusedLocals false"
   },

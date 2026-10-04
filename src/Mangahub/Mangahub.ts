@@ -34,13 +34,16 @@ import {
     parseChapterPages,
     parseEncryptedPagesEnvelope
 } from './MangahubCrypto'
+import { CdnProbeResult, discoverCdnPages } from './MangahubCdn'
 
 const MH_DOMAIN = 'https://mangahub.io'
 const MH_API_DOMAIN = 'https://api.mghcdn.com/graphql'
 const CHAPTER_CRYPTO_URL = `${MH_DOMAIN}/api/chapter-crypto`
+const CHAPTER_CACHE_TTL_MS = 60000
+const CHAPTER_CACHE_LIMIT = 16
 
 export const MangahubInfo: SourceInfo = {
-    version: '3.2.1',
+    version: '3.2.2',
     name: 'Mangahub',
     icon: 'icon.png',
     author: 'Netsky',
@@ -78,8 +81,28 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
         }
     });
 
+    cdnRequestManager = App.createRequestManager({
+        requestsPerSecond: 500,
+        requestTimeout: 5000,
+        interceptor: {
+            interceptRequest: async (request: Request): Promise<Request> => {
+                request.headers = {
+                    ...(request.headers ?? {}),
+                    'Referer': `${MH_DOMAIN}/`,
+                    'Origin': MH_DOMAIN,
+                    'User-Agent': await this.requestManager.getDefaultUserAgent()
+                }
+                return request
+            },
+            interceptResponse: async (response: Response): Promise<Response> => response
+        }
+    })
+
     stateManager = App.createSourceStateManager()
     chapterCryptoKey: ChapterCryptoKey | null = null
+    mangaSlugs = new Map<string, string>()
+    chapterPagesCache = new Map<string, { pages: string[], expiresAt: number }>()
+    pendingChapters = new Map<string, Promise<string[]>>()
 
     getMhubAccess = async (): Promise<string> => {
         const cookie = this.requestManager.cookieStore?.getAllCookies().find(cookie => cookie.name === 'mhub_access')
@@ -102,6 +125,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
                 query: `query {
                     manga(x: m01, slug: "${mangaId}") {
                         title
+                        mainSlug
                         alternativeTitle
                         author
                         artist
@@ -125,6 +149,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
         }
 
         if (!data.data?.manga) throw new Error(`Failed to parse manga property from data object mangaId:${mangaId}`)
+        await this.rememberMainSlug(mangaId, data.data.manga.mainSlug)
         return parseMangaDetails(data.data.manga, mangaId)
     }
 
@@ -140,6 +165,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
                 query: `query {
                     manga(x: m01, slug: "${mangaId}") {
                         title
+                        mainSlug
                         chapters {
                           number
                           title
@@ -162,7 +188,39 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
 
         if (!data.data?.manga) throw new Error(`Failed to parse manga property from data object mangaId:${mangaId}`)
         if (data.data.manga.chapters?.length == 0) throw new Error(`Failed to parse chapters property from manga object mangaId:${mangaId}`)
+        await this.rememberMainSlug(mangaId, data.data.manga.mainSlug)
         return parseChapters(data.data.manga.chapters, mangaId)
+    }
+
+    async rememberMainSlug(mangaId: string, mainSlug: unknown): Promise<void> {
+        if (typeof mainSlug !== 'string' || !mainSlug) return
+        this.mangaSlugs.set(mangaId, mainSlug)
+        await this.stateManager.store(`slug_${mangaId}`, mainSlug)
+    }
+
+    async getMainSlug(mangaId: string): Promise<string> {
+        const cached = this.mangaSlugs.get(mangaId) || await this.stateManager.retrieve(`slug_${mangaId}`)
+        if (typeof cached === 'string' && cached) return cached
+        try {
+            const request = App.createRequest({
+                url: MH_API_DOMAIN,
+                method: 'POST',
+                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                data: { query: `query { manga(x: m01, slug: ${JSON.stringify(mangaId)}) { mainSlug } }` }
+            })
+            const response = await this.requestManager.schedule(request, 1)
+            if (response.status < 400) {
+                const data = JSON.parse(response.data as string)
+                const mainSlug = data.data?.manga?.mainSlug
+                if (typeof mainSlug === 'string' && mainSlug) {
+                    await this.rememberMainSlug(mangaId, mainSlug)
+                    return mainSlug
+                }
+            }
+        } catch {
+            // A missing slug must not prevent probing a chapter by its manga ID.
+        }
+        try { return decodeURIComponent(mangaId) } catch { return mangaId }
     }
 
     async getChapterCryptoKey(forceRefresh = false): Promise<ChapterCryptoKey> {
@@ -194,6 +252,64 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
     }
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
+        const number = Number(chapterId)
+        if (!Number.isFinite(number)) throw new Error('Invalid MangaHub chapter number')
+        const cacheKey = JSON.stringify([mangaId, number])
+        const cached = this.chapterPagesCache.get(cacheKey)
+        if (cached && cached.expiresAt > Date.now()) {
+            this.chapterPagesCache.delete(cacheKey)
+            this.chapterPagesCache.set(cacheKey, cached)
+            return App.createChapterDetails({ id: chapterId, mangaId, pages: cached.pages.slice() })
+        }
+        this.chapterPagesCache.delete(cacheKey)
+
+        let pending = this.pendingChapters.get(cacheKey)
+        if (!pending) {
+            pending = this.loadChapterPages(mangaId, chapterId, number)
+            this.pendingChapters.set(cacheKey, pending)
+        }
+        try {
+            const pages = await pending
+            this.chapterPagesCache.set(cacheKey, { pages, expiresAt: Date.now() + CHAPTER_CACHE_TTL_MS })
+            while (this.chapterPagesCache.size > CHAPTER_CACHE_LIMIT) {
+                this.chapterPagesCache.delete(this.chapterPagesCache.keys().next().value!)
+            }
+            return App.createChapterDetails({ id: chapterId, mangaId, pages: pages.slice() })
+        } finally {
+            if (this.pendingChapters.get(cacheKey) === pending) this.pendingChapters.delete(cacheKey)
+        }
+    }
+
+    async probeCdnPage(url: string): Promise<CdnProbeResult> {
+        try {
+            const response = await this.cdnRequestManager.schedule(App.createRequest({ url, method: 'HEAD' }), 1)
+            if (response.status === 404 || response.status === 410) return 'missing'
+            const contentTypeHeader = Object.keys(response.headers ?? {}).find(name => name.toLowerCase() === 'content-type')
+            const contentType = contentTypeHeader ? response.headers[contentTypeHeader] : undefined
+            if ((response.status === 200 || response.status === 206) &&
+                (!contentType || /^image\//i.test(String(contentType)))) return 'exists'
+            return 'inconclusive'
+        } catch {
+            return 'inconclusive'
+        }
+    }
+
+    async loadChapterPages(mangaId: string, chapterId: string, number: number): Promise<string[]> {
+        let cdnError: unknown
+        try {
+            const mainSlug = await this.getMainSlug(mangaId)
+            return await discoverCdnPages(mainSlug, number, url => this.probeCdnPage(url))
+        } catch (error) {
+            cdnError = error
+        }
+        try {
+            return await this.loadGraphqlChapterPages(mangaId, chapterId, number)
+        } catch (error) {
+            throw new Error(`MangaHub chapter pages unavailable. CDN: ${cdnError}; GraphQL: ${error}`)
+        }
+    }
+
+    async loadGraphqlChapterPages(mangaId: string, chapterId: string, number: number): Promise<string[]> {
         const request = App.createRequest({
             url: MH_API_DOMAIN,
             method: 'POST',
@@ -203,7 +319,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
             },
             data: {
                 query: `query {
-                    chapter(x: m01, slug: "${mangaId}", number: ${Number(chapterId)}) {
+                    chapter(x: m01, slug: "${mangaId}", number: ${number}) {
                       pages
                       title
                       slug
@@ -239,9 +355,7 @@ export class Mangahub implements SearchResultsProviding, MangaProviding, Chapter
             pagesJson = decryptChapterPages(pagesJson, key)
         }
 
-        const pages = parseChapterPages(pagesJson)
-
-        return App.createChapterDetails({ id: chapterId, mangaId, pages })
+        return parseChapterPages(pagesJson)
     }
 
     async getSearchTags(): Promise<TagSection[]> {
